@@ -28,15 +28,29 @@ Rather than widening the scope of the main `gws` credential — which would mix 
 
 ## Installation
 
-Clone the repository and install the minimal dependencies (all standard libraries plus three well-known packages):
+Two plain steps: put the code somewhere **durable**, then register it with the client.
+
+**Where the code lives: `$HOME/.local/share/google-extras-mcp`.**
+Downloads and Desktop folders are disposable — assume they get `rm -rf`-ed. A server the client spawns at every startup must live somewhere that survives that. Clone with git (full history), so updates are a `git pull` in place.
+
+**Scripted (recommended):**
 
 ```bash
-git clone https://github.com/Manamama-Deepseek-AI-01/google-extras-mcp.git
-cd google-extras-mcp
-pip install --user -r requirements.txt
+bash install.sh                                   # clones from GitHub to ~/.local/share/google-extras-mcp
+bash /old/location/google-extras-mcp/install.sh   # or: move an existing checkout there (git clone, full)
 ```
 
-Termux / Android works too, with no extra system packages — `python3` plus those three wheels is the whole requirement. Nothing here needs `gcloud`, a JDK, or root; the auth script is stdlib-only.
+The script installs dependencies, registers the server with OpenCode, and prints the remaining (human) auth step. It is safe to re-run.
+
+**Manual equivalent:**
+
+```bash
+git clone https://github.com/Manamama-Deepseek-AI-01/google-extras-mcp.git ~/.local/share/google-extras-mcp
+python3 -m pip install -r ~/.local/share/google-extras-mcp/requirements.txt
+# registration: next section
+```
+
+Termux / Android works too, with no extra system packages — `python3` plus those three wheels is the whole requirement. Nothing here needs `gcloud`, a JDK, or root; the auth script is stdlib-only. (If your Python refuses system-wide installs, add `--user` to the pip line.)
 
 ---
 
@@ -54,11 +68,21 @@ Because Google's `gcloud` command-line OAuth client is allowlisted narrowly and 
 4. Create **Credentials** → **OAuth client ID** → Application type: **Desktop app**.
 5. Download the client secret JSON file.
 
-### 2. Run the Auth Flow
+Already have a Desktop-type `client_secret_*.json` on this machine — e.g. the one another local MCP uses (`~/.config/gws/client_secret.json`)? Reuse it: the OAuth *client* is only an app identity; this flow mints its own independent token. The APIs from step 2 must be enabled in that client's project.
+
+### 2. Run the Auth Flow — who does what
+
 ```bash
-python3 auth_flow.py --client ~/Downloads/client_secret_XXXX.json
+python3 ~/.local/share/google-extras-mcp/auth_flow.py --client <your-oauth-client.json>
 ```
-This starts an ephemeral local loopback server, prints an authorisation URL, waits for your browser click, and writes the resulting token to `~/.config/google-extras-mcp/credentials.json` with secure `0600` permissions.
+
+The division of labour, so nobody improvises:
+
+1. **The command** (you, or your agent) prints `AUTH_URL: https://accounts.google.com/...`, binds loopback (`listening on 127.0.0.1:PORT, ::1:PORT`) and **waits** — nothing proceeds until a browser comes back.
+2. **A human opens `AUTH_URL` and approves the consent screens** — account choice, scope list, and in Testing mode the "Google hasn't verified this app → Continue" dance. This part cannot be scripted: the browser must run **on the same device** as the flow, because Google redirects back to `127.0.0.1:PORT`.
+3. **On a phone:** `termux-open "$AUTH_URL"` pops the default browser (Cromite, Chrome, …) for the human. It engages from the Termux app; from an *ssh session into* Termux it may silently not fire — then copy the URL into the browser by hand.
+4. On success the script writes `~/.config/google-extras-mcp/credentials.json` (`0600`) and prints `ACCOUNT: <address>`.
+5. Verify with the Self-Check (last section): expect `failures: 0`.
 
 > **Note on Testing Mode:** If your OAuth consent screen is in *Testing* publishing mode, Google expires refresh tokens after 7 days. When that happens, simply re-run `auth_flow.py`.
 
@@ -106,6 +130,8 @@ Because it cannot ask for these scopes, and on a phone it cannot run at all:
 | Token works, then fails after ~7 days | Consent screen in *Testing* | Re-run the flow, or publish the app (unverified is fine) |
 | `granted` scopes differ from what you asked | Google substituted a neighbouring scope set — e.g. `classroom.student-submissions.*` for `classroom.coursework.*` | Expected; the script stores what was actually granted |
 | Account authorised is not the one you wanted | Several Google sessions in the browser | `--login-hint`, then check the `ACCOUNT:` line |
+| `termux-open` did nothing — browser never opened | Flow was started over an ssh session *into* Termux; no app context to engage the browser | Run the flow from the Termux app itself, or paste `AUTH_URL` into the browser by hand |
+| Server absent from `/mcps` and `opencode mcp list` after registering | OpenCode reads MCP config only at startup — no hot reload | Restart OpenCode, or start a new session |
 
 ---
 
@@ -126,31 +152,48 @@ Because it cannot ask for these scopes, and on a phone it cannot run at all:
 
 ## Registration in OpenCode (or any MCP Client)
 
-Add the server to your global OpenCode configuration (`~/.config/opencode/opencode.jsonc`):
+One command — the CLI edits the config itself (and honours JSONC comments):
 
-```json
+```bash
+opencode mcp add google-extras --global -- python3 "$HOME/.local/share/google-extras-mcp/server.py"
+```
+
+Or by hand, in the global config (`~/.config/opencode/opencode.jsonc`), under `"mcp"` → `"servers"`:
+
+```jsonc
 "mcp": {
   "servers": {
     "google-extras": {
       "type": "local",
       "command": [
-        "/usr/bin/python3",
-        "/path/to/google-extras-mcp/server.py"
+        "python3",
+        "/home/you/.local/share/google-extras-mcp/server.py"
       ],
-      "timeout": {
-        "startup": 30000,
-        "catalog": 30000
-      }
+      "enabled": true
     }
   }
 }
 ```
 
+* `python3` stays **bare** — the client resolves it on the PATH of the user running it. Do not hard-code `/usr/bin/python3`; that is one machine's path, not a universal one.
+* The server path must be **absolute**: JSONC does not expand `~`.
+* **No hot reload.** OpenCode reads MCP config at startup only. Restart the client (or start a new session) after registering; `/mcps` then shows `google-extras` connected, and `opencode mcp list` lists it.
+
 ### Self-Check
-You can verify the entire server and its credentials without starting an MCP client:
+
+You can verify the entire server and its credentials without starting an MCP client — run it after install and after every re-auth:
+
 ```bash
-python3 server.py --check
+python3 ~/.local/share/google-extras-mcp/server.py --check    # expect: failures: 0
 ```
+
+And the rule that saves the most time: **the check's failure text is the manual.** When a tool line reads
+
+```
+FAIL blogger_blogs   No usable OAuth token. Run:  python3 auth_flow.py --client <oauth-client.json>  and open the printed URL. …
+```
+
+that line *is* the next step — run exactly that command, hand the printed `AUTH_URL` to a human, and let the browser consent. Don't improvise around it.
 
 ---
 
