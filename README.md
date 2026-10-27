@@ -4,7 +4,7 @@ A read-only Model Context Protocol (MCP) server that extends the official Google
 
 ## Why this exists
 
-The official Google Workspace MCP (`gws`) covers 119 tools across Gmail, Google Drive, Calendar, Docs, Sheets, Slides, Forms, Tasks, Chat, Contacts, and Apps Script. However, it does not cover Blogger, Books, or Classroom. 
+The official [Google Workspace MCP]([url](https://github.com/taylorwilsdon/google_workspace_mcp/)) (`gws`) covers 119 tools across Gmail, Google Drive, Calendar, Docs, Sheets, Slides, Forms, Tasks, Chat, Contacts, and Apps Script. However, it does not cover Blogger, Books, or Classroom. 
 
 Rather than widening the scope of the main `gws` credential — which would mix broad Workspace permissions into a single long-lived token — **google-extras-mcp** runs as an independent local stdio server with its own minimal, disposable credential.
 
